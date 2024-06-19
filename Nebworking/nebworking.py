@@ -12,7 +12,7 @@ class settings():
 
 
 class serverTCP():
-    def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False) -> None:
+    def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, RELAYCALLBACK=None) -> None:
         self.IP: str = IP
         self.PORT: int = PORT
         self.SOCKET: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -22,6 +22,7 @@ class serverTCP():
         self.CLIENTS: typing.Dict[threading.Thread, objects.clientObject] = {}
         self.THREADLOCK: threading.Lock = threading.Lock()
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
+        self.RELAYFUNCTION: typing.Callable[[packets.packetObject, packets.packetObject], None] = self.handleRelay if RELAYCALLBACK is None else RELAYCALLBACK
         
         
     def start(self) -> None:
@@ -50,17 +51,20 @@ class serverTCP():
         if sourceAddress is None:
             sourceAddress: typing.Tuple[str, int] = (self.IP, self.PORT)
         if destinationAddress is None:
-            destinationAddress = ("all", "all") #Send to all clients
+            destinationAddress = packets.AddressType.ALL() #Send to all clients
         
         header = packets.createHeader(packet=packet, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
         recipientClientObjects: typing.List[objects.clientObject] = []
-        if destinationAddress == ("all", "all"):
+        if destinationAddress == packets.AddressType.ALL():
             recipientClientObjects = [clientObject for clientObject in self.CLIENTS.values()]
+        elif destinationAddress == packets.AddressType.OTHERS():
+            recipientClientObjects = [(clientObject if clientObject.ADDRESS != sourceAddress else None) for clientObject in self.CLIENTS.values()]
         else:
             recipientClientObjects = [self.addressToClientObject(destinationAddress)]
         for recipientClientObject in recipientClientObjects:
-            self.sendPacket(packet=header, connection=recipientClientObject.CONNECTION)
-            self.sendPacket(packet=packet, connection=recipientClientObject.CONNECTION)
+            if recipientClientObjects:
+                self.sendPacket(packet=header, connection=recipientClientObject.CONNECTION)
+                self.sendPacket(packet=packet, connection=recipientClientObject.CONNECTION)
             
             
     def sendPacket(self, packet: bytes, connection: socket.socket):
@@ -82,6 +86,33 @@ class serverTCP():
                 return clientObject
         return None
     
+    
+    def handleRelay(self, headerPacket: packets.packetObject, contentPacket: packets.packetObject) -> None:
+        destinationAddress = headerPacket.raw['data']['destinationAddress']
+        sourceAddress = headerPacket.raw['data']['sourceAddress']
+        success = False
+        if destinationAddress == packets.AddressType.ALL():
+            for client in self.CLIENTS.values():
+                client.CONNECTION.sendall(packets.serializePacketObject(headerPacket))
+                client.CONNECTION.sendall(packets.serializePacketObject(contentPacket))
+            success = True
+            
+        elif destinationAddress == packets.AddressType.OTHERS():
+            for client in self.CLIENTS.values():
+                if client.ADDRESS == sourceAddress:
+                    continue
+                client.CONNECTION.sendall(packets.serializePacketObject(headerPacket))
+                client.CONNECTION.sendall(packets.serializePacketObject(contentPacket))
+                
+        else:
+            clientObject = self.addressToClientObject(address=destinationAddress)
+            if clientObject:
+                clientObject.CONNECTION.sendall(packets.serializePacketObject(headerPacket))
+                clientObject.CONNECTION.sendall(packets.serializePacketObject(contentPacket))
+                success = True
+        relayPacket = packets.construct.relay(sourceAddress=sourceAddress, destinationAddress=destinationAddress, relayedPacket=contentPacket, success=success, pickled=False)
+        self.queueNotification(relayPacket)
+    
         
     def handleClient(self, connection: socket.socket, clientAddress: typing.Tuple[str, int]) -> None:
         client = objects.clientObject(connection=connection, address=clientAddress, thread=threading.current_thread())
@@ -100,17 +131,17 @@ class serverTCP():
                     client.FLAG_TERMINATE = True
                 if len(header) == 0:
                     continue
-                packetAsObject: packets.packetObject = pickle.loads(header)
-                packet: dict = packetAsObject.raw
-                messageLength = int(packet['data']['length'])
-                del packetAsObject, packet
+                headerAsObject: packets.packetObject = pickle.loads(header)
+                headerPacketRaw: dict = headerAsObject.raw
+                messageLength = int(headerPacketRaw['data']['length'])
                 if messageLength > 0:
+                    fullPacket = packets.constructFullPacketContent(socketConnection=client.CONNECTION, packetSize=self.PACKETSIZE, length=messageLength)
+                    if headerPacketRaw['data']['destinationAddress'] == (self.IP, self.PORT):
+                        self.queueNotification(fullPacket)
+                    else:
+                        print(f"Forwarding packet to {headerPacketRaw['data']['destinationAddress']}")
+                        self.RELAYFUNCTION(headerAsObject, fullPacket)
                     
-                    packetBytes = bytes()
-                    for _chunks in range(ceil(messageLength / self.PACKETSIZE)):
-                        packetBytes += client.CONNECTION.recv(self.PACKETSIZE)
-                    packet: packets.packetObject = pickle.loads(packetBytes)
-                    self.queueNotification(packet) #Queue notification of packet
                     
         except ConnectionResetError:
             client.FLAG_TERMINATE = True

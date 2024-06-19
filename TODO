@@ -1,7 +1,7 @@
-serverTCP needs a way to terminate clients on command. Terminating clients should send a TERMINATE packet before termination to notify client
+NO 1. serverTCP needs a way to terminate clients on command. Terminating clients should send a TERMINATE packet before termination to notify client
 
-serverTCP needs to be able to take a packet, check desinationAddress and do the following: keep packet if packet intended for server, put in NOTIFICATIONS. Forward packet to intended client if not intended for server, put a RELAY packet in NOTIFICATIONS containing packet as element
+NO 2. When creating multiple instances of clientTCP connected to the same serverTCP, the first instance of clientTCP locks the main thread for some reason.
 
-When creating multiple instances of clientTCP connected to the same serverTCP, the first instance of clientTCP locks the main thread for some reason.
+NO 3. Relay packet says success=False when client sends packet with destination as packets.AddressType.OTHERS(), this may be because no other clients on network so no packets are sent out. Need to fix issue 2 first.
 
-Need RELAY packet constructor in packets.py
+NO 4. packets.AddressType.ALL() does not include the server and neither does packets.AddressType.OTHERS().

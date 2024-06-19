@@ -1,4 +1,5 @@
 import typing, enum, pickle, math
+from socket import socket
 from . import objects
 
 
@@ -12,6 +13,25 @@ class PacketType(str, enum.Enum):
     RELAY = 'relay' #When the server receives a packet with a destinationAddress that corresponds to another client on the network, a relay packet is sent to server NOTIFICATIONS and then the original packet is forwarded to the intended client
     #Note: RELAY not implemented.
     #Note: serverTCP forwarding for header sourceAddresses not implemented yet
+    
+    
+    
+class AddressType():
+    
+    @staticmethod
+    def ALL() -> typing.Tuple[str, int]:
+        return ('all', 'all')
+    
+    
+    @staticmethod
+    def OTHERS() -> typing.Tuple[str, int]:
+        return ('others', 'others')
+
+
+    @staticmethod
+    def SINGLE(address: str, port: int) -> typing.Tuple[str, int]:
+        return (address, port)
+
 
 
 class packetObject():
@@ -23,7 +43,6 @@ class packetObject():
     @property
     def raw(self) -> typing.Dict[str, object]:
         return {'packetType': self.packetType, 'data': self.data}
-    
     
     
 class construct():
@@ -59,7 +78,16 @@ class construct():
     def connection(client: objects.clientObjectSerializable, pickled: bool = True) -> typing.Union[packetObject, bytes]:
         client = objects.getSerializableClientObject(client)
         data = {'clientObject': client}
-        packet = packetObject(packetType=PacketType.CONNECTION, data = data)
+        packet = packetObject(packetType=PacketType.CONNECTION, data=data)
+        if pickled:
+            return pickle.dumps(packet)
+        return packet
+    
+    
+    @staticmethod
+    def relay(sourceAddress: typing.Tuple[str, int], destinationAddress: typing.Tuple[str, int], relayedPacket: packetObject, success=True, pickled: bool = True) -> typing.Union[packetObject, bytes]:
+        data = {'success': success, 'sourceAddress': sourceAddress, 'destinationAddress': destinationAddress, 'relayedPacket': relayedPacket}
+        packet = packetObject(packetType=PacketType.RELAY, data=data)
         if pickled:
             return pickle.dumps(packet)
         return packet
@@ -81,3 +109,15 @@ def createValidSizePackets(packet: bytes, length: int) -> typing.List[bytes]:
         else:
             packetList.append(packetChunk)
     return packetList
+
+
+def constructFullPacketContent(socketConnection: socket, packetSize: int, length: int) -> packetObject:
+    packetBytes = bytes()
+    for _chunks in range(math.ceil(length / packetSize)):
+        packetBytes += socketConnection.recv(packetSize)
+    packet: packetObject = pickle.loads(packetBytes)
+    return packet
+
+
+def serializePacketObject(nonSerializedPacketObject: packetObject) -> bytes:
+    return pickle.dumps(nonSerializedPacketObject)
