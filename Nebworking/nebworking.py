@@ -22,7 +22,6 @@ class serverTCP():
         self.CLIENTS: typing.Dict[threading.Thread, objects.clientObject] = {}
         self.THREADLOCK: threading.Lock = threading.Lock()
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
-        self.MESSAGES: queue.Queue = queue.Queue() #Used to receive packets from library user
         
         
     def start(self) -> None:
@@ -40,12 +39,36 @@ class serverTCP():
             handleClient = threading.Thread(target=self.handleClient, args=(connection, clientAddress))
             handleClient.start()
             handleClient.join()
-            
-            
-    def sendThread(self) -> None:
-        pass
          
+    
+    def sendData(self, data: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
+        payloadPacket = packets.construct.payload(data)
+        self.sendPacketAuto(packet=payloadPacket, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+        
+    
+    def sendPacketAuto(self, packet: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
+        if sourceAddress is None:
+            sourceAddress: typing.Tuple[str, int] = (self.IP, self.PORT)
+        if destinationAddress is None:
+            destinationAddress = ("all", "all") #Send to all clients
+        
+        header = packets.createHeader(packet=packet, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+        recipientClientObjects: typing.List[objects.clientObject] = []
+        if destinationAddress == ("all", "all"):
+            recipientClientObjects = [clientObject for clientObject in self.CLIENTS.values()]
+        else:
+            recipientClientObjects = [self.addressToClientObject(destinationAddress)]
+        for recipientClientObject in recipientClientObjects:
+            self.sendPacket(packet=header, connection=recipientClientObject.CONNECTION)
+            self.sendPacket(packet=packet, connection=recipientClientObject.CONNECTION)
             
+            
+    def sendPacket(self, packet: bytes, connection: socket.socket):
+        packet = packets.createValidSizePackets(packet=packet, length=self.PACKETSIZE)
+        for packetChunk in packet:
+            connection.sendall(packetChunk)
+    
+    
     def addressToThreadInstance(self, address: typing.Tuple[str, int]) -> threading.Thread: #Used for tracing a client address to the thread object handling the connection, useful for indexing self.CLIENTS
         for thread in self.CLIENTS.keys():
             if self.CLIENTS[thread].ADDRESS == address:
@@ -53,8 +76,12 @@ class serverTCP():
         return None
     
     
-    def clientObjFromAddress(self, address: typing.Tuple[str, int]) -> objects.clientObject:
-        return self.CLIENTS[self.addressToThreadInstance(address=address)]
+    def addressToClientObject(self, address: typing.Tuple[str, int]) -> objects.clientObject:
+        for clientObject in self.CLIENTS.values():
+            if clientObject.ADDRESS == address:
+                return clientObject
+        return None
+    
         
     def handleClient(self, connection: socket.socket, clientAddress: typing.Tuple[str, int]) -> None:
         client = objects.clientObject(connection=connection, address=clientAddress, thread=threading.current_thread())
@@ -65,6 +92,7 @@ class serverTCP():
         self.CLIENTS[str(threading.current_thread())] = client
         ### END THREADLOCK ###
         self.THREADLOCK.release()
+        self.sendPacketAuto(packet=packets.construct.connection(client=client), destinationAddress=client.ADDRESS)
         try:
             while not client.FLAG_TERMINATE:
                 header = connection.recv(self.PACKETSIZE)
@@ -99,11 +127,22 @@ class serverTCP():
     
     def queueNotification(self, packet: packets.packetObject) -> None:
         self.NOTIFICATIONS.put(packet)
+        
+        
+    def getNotification(self) -> packets.packetObject:
+        if self.NOTIFICATIONS.empty():
+            return None
+        return self.NOTIFICATIONS.get()
                 
         
     @property
     def CLIENTCOUNT(self) -> int: #Used for property self.CLIENTCOUNT as a get method
         return len(self.CLIENTS)
+    
+    
+    @property
+    def CLIENTADDRESSLIST(self) -> typing.List[typing.Tuple[str, int]]:
+        return [clientObject.ADDRESS for clientObject in self.CLIENTS.values()]
         
         
     def debug(self, message: str) -> None:
@@ -121,7 +160,6 @@ class clientTCP():
         self.DEBUG: bool = DEBUG
         self.PACKETSIZE: int = settings.PACKETSIZE #Size of portion of packet taken from network stack at a time
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
-        self.MESSAGES: queue.Queue = queue.Queue() #Used to receive packets from library user
         
         self.FLAG_TERMINATE: bool = False
         
@@ -141,7 +179,7 @@ class clientTCP():
             
     def receiveThread(self) -> None:
         while not self.FLAG_TERMINATE:
-            header = self.SOCKET.recv(self.PACKETSIZE).decode(self.ENCODING).encode()
+            header = self.SOCKET.recv(self.PACKETSIZE)
             if not header:
                 self.FLAG_TERMINATE = True
             if len(header) == 0:
@@ -152,9 +190,9 @@ class clientTCP():
             del packetAsObject, packet
             
             if messageLength > 0:
-                packetBytes = str()
+                packetBytes = bytes()
                 for _chunks in range(ceil(messageLength / self.PACKETSIZE)):
-                    packetBytes += self.SOCKET.recv(self.PACKETSIZE).decode(self.ENCODING)
+                    packetBytes += self.SOCKET.recv(self.PACKETSIZE)
                 packet: packets.packetObject = pickle.loads(packetBytes)
                 self.queueNotification(packet) #Queue notification of packet
         
@@ -168,24 +206,44 @@ class clientTCP():
         
         
     def sendData(self, data: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
+        payloadPacket = packets.construct.payload(data)
+        self.sendPacketAuto(packet=payloadPacket, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+        
+    
+    def sendPacketAuto(self, packet: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
         if sourceAddress is None:
             sourceAddress: typing.Tuple[str, int] = self.SOCKET.getsockname()
         if destinationAddress is None:
             destinationAddress = (self.SERVERIP, self.SERVERPORT)
+        
+        header = packets.createHeader(packet=packet, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+        self.sendPacket(packet=header)
+        self.sendPacket(packet=packet)
             
-        payloadPacket = packets.construct.payload(data)
-        
-        header = packets.createHeader(packet=payloadPacket, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
-        self.sendPacket(header)
-        self.sendPacket(payloadPacket)
-        
-    
-    def sendPacket(self, packet: bytes) -> None: #When using, note that you will need to manually send a header packet. Use sendData for payload packets
+            
+    def sendPacket(self, packet: bytes):
         packet = packets.createValidSizePackets(packet=packet, length=self.PACKETSIZE)
         for packetChunk in packet:
             self.SOCKET.sendall(packetChunk)
-     
-     
+            
+            
+    def waitForConnectionPacket(self):
+        while True:
+            if self.NOTIFICATIONS.qsize() > 0:
+                item: packets.packetObject = self.NOTIFICATIONS.get()
+                self.NOTIFICATIONS.put(item)
+                if item.packetType == packets.PacketType.CONNECTION:
+                    break
+                
+                
+    def getNotification(self) -> packets.packetObject:
+        if self.NOTIFICATIONS.empty():
+            return None
+        return self.NOTIFICATIONS.get()
+             
+        
+        
+        
     def debug(self, message: str) -> None:
         if self.DEBUG:
             print(message)
