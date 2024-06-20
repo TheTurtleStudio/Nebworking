@@ -89,17 +89,21 @@ class serverTCP():
         return None
     
     
-    def handleRelay(self, headerPacket: packets.packetObject, contentPacket: packets.packetObject) -> None:
+    def handleRelay(self, headerPacket: packets.packetObject, contentPacket: packets.packetObject) -> bool:
         destinationAddress = headerPacket.raw['data']['destinationAddress']
         sourceAddress = headerPacket.raw['data']['sourceAddress']
         success = self.sendPacket(packet=packets.serializePacketObject(contentPacket), header=packets.serializePacketObject(headerPacket))
         relayPacket = packets.construct.relay(sourceAddress=sourceAddress, destinationAddress=destinationAddress, relayedPacket=contentPacket, success=success, pickled=False)
-        self.queueNotification(relayPacket)
+        relayPacketHeader: packets.packetObject = packets.createHeader(packet=relayPacket, sourceAddress=(self.IP, self.PORT), destinationAddress=(self.IP, self.PORT), pickled=False)
+        self.queueNotification(header=relayPacketHeader, packet=relayPacket)
+        return success
     
         
     def handleClient(self, connection: socket.socket, clientAddress: typing.Tuple[str, int]) -> None:
         client = objects.clientObject(connection=connection, address=clientAddress, thread=threading.current_thread())
-        self.queueNotification(packets.construct.connection(client=client, pickled=False))
+        connectionPacket = packets.construct.connection(client=client, pickled=False)
+        connectionPacketHeader = packets.createHeader(packet=connectionPacket, sourceAddress=(self.IP, self.PORT), destinationAddress=(self.IP, self.PORT), pickled=False)
+        self.queueNotification(header=connectionPacketHeader, packet=connectionPacket)
         self.debug(f'[CONNECTION]: {clientAddress} connected')
         self.THREADLOCK.acquire()
         ### BEGIN THREADLOCK ###
@@ -115,14 +119,20 @@ class serverTCP():
                 if len(header) == 0:
                     continue
                 headerAsObject: packets.packetObject = pickle.loads(header)
-                headerPacketRaw: dict = headerAsObject.raw
-                messageLength = int(headerPacketRaw['data']['length'])
-                if messageLength > 0:
-                    fullPacket = packets.constructFullPacketContent(socketConnection=client.CONNECTION, packetSize=self.PACKETSIZE, length=messageLength)
-                    if headerPacketRaw['data']['destinationAddress'] == (self.IP, self.PORT):
-                        self.queueNotification(fullPacket)
+                messageLength = int(headerAsObject.data['length'])
+                if not messageLength > 0:
+                    continue 
+                
+                fullPacket = packets.constructFullPacketContent(socketConnection=client.CONNECTION, packetSize=self.PACKETSIZE, length=messageLength)
+                _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=client.ADDRESS)#Send Accepted reponse to show client we got it.
+                if headerAsObject.data['destinationAddress'] == (self.IP, self.PORT):
+                    self.queueNotification(header=headerAsObject, packet=fullPacket)
+                    _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS) #Server took it, send OK
+                else:
+                    if self.RELAYFUNCTION(headerAsObject, fullPacket):
+                        _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS) #No breaking rules and delivered, send OK
                     else:
-                        self.RELAYFUNCTION(headerAsObject, fullPacket)
+                        _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C400, sendPacketCallback=self.sendPacket, address=client.ADDRESS) #Not delivered or breaking rules, send Bad Request
                     
                     
         except ConnectionResetError:
@@ -134,15 +144,17 @@ class serverTCP():
         del self.CLIENTS[str(threading.current_thread())]
         ### END THREADLOCK ###
         self.THREADLOCK.release()
-        self.queueNotification(packets.construct.terminate(client=client, pickled=False))
+        terminatePacket = packets.construct.terminate(client=client, pickled=False)
+        terminatePacketHeader = packets.createHeader(packet=terminatePacket, sourceAddress=(self.IP, self.PORT), destinationAddress=(self.IP, self.PORT), pickled=False)
+        self.queueNotification(header=terminatePacketHeader, packet=terminatePacket)
         self.debug(f'[CONNECTION]: {clientAddress} connection closed')
     
     
-    def queueNotification(self, packet: packets.packetObject) -> None:
-        self.NOTIFICATIONS.put(packet)
+    def queueNotification(self, header: packets.packetObject, packet: packets.packetObject) -> None:
+        self.NOTIFICATIONS.put((header, packet))
         
         
-    def getNotification(self) -> packets.packetObject:
+    def getNotification(self) -> typing.Tuple[packets.packetObject, packets.packetObject]:
         if self.NOTIFICATIONS.empty():
             return None
         return self.NOTIFICATIONS.get()
@@ -197,21 +209,23 @@ class clientTCP():
                 self.FLAG_TERMINATE = True
             if len(header) == 0:
                 continue
-            packetAsObject: packets.packetObject = pickle.loads(header)
-            packet: dict = packetAsObject.raw
-            messageLength = int(packet['data']['length'])
-            del packetAsObject, packet
+            headerAsObject: packets.packetObject = pickle.loads(header)
+            messageLength = int(headerAsObject.data['length'])
             
-            if messageLength > 0:
-                packetBytes = bytes()
-                for _chunks in range(ceil(messageLength / self.PACKETSIZE)):
-                    packetBytes += self.SOCKET.recv(self.PACKETSIZE)
-                packet: packets.packetObject = pickle.loads(packetBytes)
-                self.queueNotification(packet) #Queue notification of packet
+            if not messageLength > 0:
+                continue 
+            
+            packetBytes = bytes()
+            for _chunks in range(ceil(messageLength / self.PACKETSIZE)):
+                packetBytes += self.SOCKET.recv(self.PACKETSIZE)
+            packet: packets.packetObject = pickle.loads(packetBytes)
+            _common.sendResponse(packet=packet, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'])
+            _common.sendResponse(packet=packet, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'])
+            self.queueNotification(header=headerAsObject, packet=packet) #Queue notification of packet
         
         
-    def queueNotification(self, packet: packets.packetObject) -> None:
-        self.NOTIFICATIONS.put(packet)
+    def queueNotification(self, header:packets.packetObject, packet: packets.packetObject) -> None:
+        self.NOTIFICATIONS.put((header, packet))
         
         
     def sendData(self, data: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
@@ -232,13 +246,14 @@ class clientTCP():
     def waitForConnectionPacket(self):
         while True:
             if self.NOTIFICATIONS.qsize() > 0:
-                item: packets.packetObject = self.NOTIFICATIONS.get()
-                self.NOTIFICATIONS.put(item)
-                if item.packetType == packets.PacketType.CONNECTION:
+                notification: typing.Tuple[packets.packetObject, packets.packetObject] = self.NOTIFICATIONS.get()
+                header, packet = notification
+                self.NOTIFICATIONS.put(notification)
+                if packet.packetType == packets.PacketType.CONNECTION:
                     break
                 
                 
-    def getNotification(self) -> packets.packetObject:
+    def getNotification(self) -> typing.Tuple[packets.packetObject, packets.packetObject]:
         if self.NOTIFICATIONS.empty():
             return None
         return self.NOTIFICATIONS.get()
@@ -253,8 +268,8 @@ class clientTCP():
 
 
 class _common():
-    @classmethod
-    def sendPacketPair(self, headerPacket: typing.Union[packets.packetObject, bytes], contentPacket: typing.Union[packets.packetObject, bytes], connection: socket.socket):
+    @staticmethod
+    def sendPacketPair(headerPacket: typing.Union[packets.packetObject, bytes], contentPacket: typing.Union[packets.packetObject, bytes], connection: socket.socket) -> None:
         #Splitting the information into valid sized packets and then joining it back together might not be the most efficient but this is how I'll do it for now.
         validHeaderPackets = packets.createValidSizePackets(packet=headerPacket, length=_settings.PACKETSIZE)
         validContentPackets = packets.createValidSizePackets(packet=contentPacket, length=_settings.PACKETSIZE)
@@ -262,3 +277,9 @@ class _common():
         validContentPacket = b"".join(validContentPackets)
         fullPacketBytes = packets.getFullPacketBytes(header=validHeaderPacket, packet=validContentPacket)
         connection.sendall(fullPacketBytes)
+        
+    @staticmethod
+    def sendResponse(packet: packets.packetObject, sendPacketCallback: typing.Callable, status: packets.ResponseStatus, address: typing.Tuple[str, int]):
+        if packet.packetType != packets.PacketType.RESPONSE: #If we're not responding to a response, respond. Duh.
+            
+            sendPacketCallback(packet=packets.construct.response(status=status), destinationAddress=address) #Send Accepted reponse to show client we got it.

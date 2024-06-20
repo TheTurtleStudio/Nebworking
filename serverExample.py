@@ -17,5 +17,6 @@ while True:
     NOTIFICATION = server.getNotification()
     if not NOTIFICATION:
         continue
-    
-    print(NOTIFICATION.raw)
+    print(f"Received header: {NOTIFICATION[0].raw}")
+    print(f"Received packet: {NOTIFICATION[1].raw}")
+    print()

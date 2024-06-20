@@ -11,7 +11,17 @@ class PacketType(str, enum.Enum):
     PAYLOAD = 'payload' #Normal data packet.
     CONNECTION = 'connection' #Sent to server NOTIFICATIONS when a connection is established between client and server
     RELAY = 'relay' #When the server receives a packet with a destinationAddress that corresponds to another client on the network, a relay packet is sent to server NOTIFICATIONS and then the original packet is forwarded to the intended client
+    RESPONSE = 'reponse' #Sent to the client when a packet is handled. Returned status via ResponseStatus
     
+    
+class ResponseStatus(str, enum.Enum): #Based off HTTP response status codes
+    C200 = "OK" #Everything succeeded. Very good.
+    C202 = "Accepted" #Request has been received
+    C400 = "Bad Request" #Can't/won't process request due to sender error
+    C403 = "Forbidden" #Sender does not have access to the content requested
+    C405 = "Method Not Allowed" #Request method is known but sender does not have access to make the request
+    C418 = "Nebnotworking" #Little easter egg :)
+    C500 = "Internal Server Error" #Cannot serve client due to a server error
     
     
 class AddressType():
@@ -86,6 +96,15 @@ class construct():
     def relay(sourceAddress: typing.Tuple[str, int], destinationAddress: typing.Tuple[str, int], relayedPacket: packetObject, success=True, pickled: bool = True) -> typing.Union[packetObject, bytes]:
         data = {'success': success, 'sourceAddress': sourceAddress, 'destinationAddress': destinationAddress, 'relayedPacket': relayedPacket}
         packet = packetObject(packetType=PacketType.RELAY, data=data)
+        if pickled:
+            return pickle.dumps(packet)
+        return packet
+    
+    
+    @staticmethod
+    def response(status: ResponseStatus, pickled: bool = True) -> typing.Union[packetObject, bytes]:
+        data = {'status': status.name, 'description': status.value}
+        packet = packetObject(packetType=PacketType.RESPONSE, data=data)
         if pickled:
             return pickle.dumps(packet)
         return packet
