@@ -103,6 +103,7 @@ class serverTCP():
                     continue
                 client.CONNECTION.sendall(packets.serializePacketObject(headerPacket))
                 client.CONNECTION.sendall(packets.serializePacketObject(contentPacket))
+                success = True
                 
         else:
             clientObject = self.addressToClientObject(address=destinationAddress)
