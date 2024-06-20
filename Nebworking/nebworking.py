@@ -1,4 +1,4 @@
-import socket, typing, ipaddress, threading, pickle, queue #Public libraries
+import socket, typing, threading, pickle, queue #Public libraries
 from math import ceil
 from . import packets #Local libraries
 from . import objects
@@ -6,23 +6,24 @@ from . import objects
 
 
 
-class settings():
+class _settings():
     PACKETSIZE: int = 1024
 
 
 
 class serverTCP():
-    def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, RELAYCALLBACK=None) -> None:
+    def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, RELAYCALLBACK=None, ALLOWSOURCESPOOFING=True) -> None:
         self.IP: str = IP
         self.PORT: int = PORT
         self.SOCKET: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.ENCODING: str = ENCODING
         self.DEBUG: bool = DEBUG
-        self.PACKETSIZE: int = settings.PACKETSIZE #Size of portion of packet taken from network stack at a time
+        self.PACKETSIZE: int = _settings.PACKETSIZE #Size of portion of packet taken from network stack at a time
         self.CLIENTS: typing.Dict[threading.Thread, objects.clientObject] = {}
         self.THREADLOCK: threading.Lock = threading.Lock()
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
         self.RELAYFUNCTION: typing.Callable[[packets.packetObject, packets.packetObject], None] = self.handleRelay if RELAYCALLBACK is None else RELAYCALLBACK
+        self.ALLOWSOURCESPOOFING: bool = ALLOWSOURCESPOOFING #To be implemented
         
         
     def start(self) -> None:
@@ -39,21 +40,27 @@ class serverTCP():
             connection, clientAddress = self.SOCKET.accept()
             handleClient = threading.Thread(target=self.handleClient, args=(connection, clientAddress))
             handleClient.start()
-            handleClient.join()
          
     
     def sendData(self, data: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
         payloadPacket = packets.construct.payload(data)
-        self.sendPacketAuto(packet=payloadPacket, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+        self.sendPacket(packet=payloadPacket, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
         
     
-    def sendPacketAuto(self, packet: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
-        if sourceAddress is None:
-            sourceAddress: typing.Tuple[str, int] = (self.IP, self.PORT)
-        if destinationAddress is None:
+    def sendPacket(self, packet: bytes, header: bytes=None, sourceAddress: typing.Tuple[str, int]=None, destinationAddress: typing.Tuple[str, int]=None) -> bool:
+        if sourceAddress is None and header is None:
+            sourceAddress = (self.IP, self.PORT)
+        elif sourceAddress is None and header is not None:
+            sourceAddress = packets.unSerializePacketObject(header).data['sourceAddress'] 
+        if destinationAddress is None and header is None:
             destinationAddress = packets.AddressType.ALL() #Send to all clients
-        
-        header = packets.createHeader(packet=packet, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+        elif destinationAddress is None and header is not None:
+            destinationAddress = packets.unSerializePacketObject(header).data['destinationAddress']
+
+
+        if header is None:
+            header = packets.createHeader(packet=packet, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+            
         recipientClientObjects: typing.List[objects.clientObject] = []
         if destinationAddress == packets.AddressType.ALL():
             recipientClientObjects = [clientObject for clientObject in self.CLIENTS.values()]
@@ -61,16 +68,11 @@ class serverTCP():
             recipientClientObjects = [(clientObject if clientObject.ADDRESS != sourceAddress else None) for clientObject in self.CLIENTS.values()]
         else:
             recipientClientObjects = [self.addressToClientObject(destinationAddress)]
+            
         for recipientClientObject in recipientClientObjects:
-            if recipientClientObjects:
-                self.sendPacket(packet=header, connection=recipientClientObject.CONNECTION)
-                self.sendPacket(packet=packet, connection=recipientClientObject.CONNECTION)
-            
-            
-    def sendPacket(self, packet: bytes, connection: socket.socket):
-        packet = packets.createValidSizePackets(packet=packet, length=self.PACKETSIZE)
-        for packetChunk in packet:
-            connection.sendall(packetChunk)
+            if recipientClientObject:
+                _common.sendPacketPair(headerPacket=header, contentPacket=packet, connection=recipientClientObject.CONNECTION)
+        return True if len(recipientClientObjects) > 0 else False #Return if any packets were sent
     
     
     def addressToThreadInstance(self, address: typing.Tuple[str, int]) -> threading.Thread: #Used for tracing a client address to the thread object handling the connection, useful for indexing self.CLIENTS
@@ -90,27 +92,7 @@ class serverTCP():
     def handleRelay(self, headerPacket: packets.packetObject, contentPacket: packets.packetObject) -> None:
         destinationAddress = headerPacket.raw['data']['destinationAddress']
         sourceAddress = headerPacket.raw['data']['sourceAddress']
-        success = False
-        if destinationAddress == packets.AddressType.ALL():
-            for client in self.CLIENTS.values():
-                client.CONNECTION.sendall(packets.serializePacketObject(headerPacket))
-                client.CONNECTION.sendall(packets.serializePacketObject(contentPacket))
-            success = True
-            
-        elif destinationAddress == packets.AddressType.OTHERS():
-            for client in self.CLIENTS.values():
-                if client.ADDRESS == sourceAddress:
-                    continue
-                client.CONNECTION.sendall(packets.serializePacketObject(headerPacket))
-                client.CONNECTION.sendall(packets.serializePacketObject(contentPacket))
-                success = True
-                
-        else:
-            clientObject = self.addressToClientObject(address=destinationAddress)
-            if clientObject:
-                clientObject.CONNECTION.sendall(packets.serializePacketObject(headerPacket))
-                clientObject.CONNECTION.sendall(packets.serializePacketObject(contentPacket))
-                success = True
+        success = self.sendPacket(packet=packets.serializePacketObject(contentPacket), header=packets.serializePacketObject(headerPacket))
         relayPacket = packets.construct.relay(sourceAddress=sourceAddress, destinationAddress=destinationAddress, relayedPacket=contentPacket, success=success, pickled=False)
         self.queueNotification(relayPacket)
     
@@ -124,7 +106,7 @@ class serverTCP():
         self.CLIENTS[str(threading.current_thread())] = client
         ### END THREADLOCK ###
         self.THREADLOCK.release()
-        self.sendPacketAuto(packet=packets.construct.connection(client=client), destinationAddress=client.ADDRESS)
+        self.sendPacket(packet=packets.construct.connection(client=client), destinationAddress=client.ADDRESS)
         try:
             while not client.FLAG_TERMINATE:
                 header = connection.recv(self.PACKETSIZE)
@@ -140,7 +122,6 @@ class serverTCP():
                     if headerPacketRaw['data']['destinationAddress'] == (self.IP, self.PORT):
                         self.queueNotification(fullPacket)
                     else:
-                        print(f"Forwarding packet to {headerPacketRaw['data']['destinationAddress']}")
                         self.RELAYFUNCTION(headerAsObject, fullPacket)
                     
                     
@@ -190,7 +171,7 @@ class clientTCP():
         self.SOCKET: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.ENCODING: str = ENCODING
         self.DEBUG: bool = DEBUG
-        self.PACKETSIZE: int = settings.PACKETSIZE #Size of portion of packet taken from network stack at a time
+        self.PACKETSIZE: int = _settings.PACKETSIZE #Size of portion of packet taken from network stack at a time
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
         
         self.FLAG_TERMINATE: bool = False
@@ -233,30 +214,19 @@ class clientTCP():
         self.NOTIFICATIONS.put(packet)
         
         
-    def queueMessage(self, packet: packets.packetObject) -> None:
-        self.MESSAGES.put(packet)
-        
-        
     def sendData(self, data: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
         payloadPacket = packets.construct.payload(data)
-        self.sendPacketAuto(packet=payloadPacket, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
+        self.sendPacket(packet=payloadPacket, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
         
     
-    def sendPacketAuto(self, packet: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
+    def sendPacket(self, packet: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
         if sourceAddress is None:
             sourceAddress: typing.Tuple[str, int] = self.SOCKET.getsockname()
         if destinationAddress is None:
-            destinationAddress = (self.SERVERIP, self.SERVERPORT)
+            destinationAddress = packets.AddressType.SINGLE(address=self.SERVERIP, port=self.SERVERPORT)
         
         header = packets.createHeader(packet=packet, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
-        self.sendPacket(packet=header)
-        self.sendPacket(packet=packet)
-            
-            
-    def sendPacket(self, packet: bytes):
-        packet = packets.createValidSizePackets(packet=packet, length=self.PACKETSIZE)
-        for packetChunk in packet:
-            self.SOCKET.sendall(packetChunk)
+        _common.sendPacketPair(headerPacket=header, contentPacket=packet, connection=self.SOCKET)
             
             
     def waitForConnectionPacket(self):
@@ -279,3 +249,16 @@ class clientTCP():
     def debug(self, message: str) -> None:
         if self.DEBUG:
             print(message)
+
+
+
+class _common():
+    @classmethod
+    def sendPacketPair(self, headerPacket: typing.Union[packets.packetObject, bytes], contentPacket: typing.Union[packets.packetObject, bytes], connection: socket.socket):
+        #Splitting the information into valid sized packets and then joining it back together might not be the most efficient but this is how I'll do it for now.
+        validHeaderPackets = packets.createValidSizePackets(packet=headerPacket, length=_settings.PACKETSIZE)
+        validContentPackets = packets.createValidSizePackets(packet=contentPacket, length=_settings.PACKETSIZE)
+        validHeaderPacket = b"".join(validHeaderPackets)
+        validContentPacket = b"".join(validContentPackets)
+        fullPacketBytes = packets.getFullPacketBytes(header=validHeaderPacket, packet=validContentPacket)
+        connection.sendall(fullPacketBytes)

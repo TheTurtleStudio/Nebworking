@@ -1,5 +1,3 @@
 NO 1. serverTCP needs a way to terminate clients on command. Terminating clients should send a TERMINATE packet before termination to notify client
 
-NO 2. When creating multiple instances of clientTCP connected to the same serverTCP, the first instance of clientTCP locks the main thread for some reason.
-
 NO 4. packets.AddressType.ALL() does not include the server and neither does packets.AddressType.OTHERS().

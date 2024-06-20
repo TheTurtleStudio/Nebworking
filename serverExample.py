@@ -19,5 +19,3 @@ while True:
         continue
     
     print(NOTIFICATION.raw)
-    if NOTIFICATION.packetType == packets.PacketType.PAYLOAD:
-        server.sendData(NOTIFICATION.data['payload'])

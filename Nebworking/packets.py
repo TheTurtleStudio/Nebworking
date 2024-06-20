@@ -11,8 +11,6 @@ class PacketType(str, enum.Enum):
     PAYLOAD = 'payload' #Normal data packet.
     CONNECTION = 'connection' #Sent to server NOTIFICATIONS when a connection is established between client and server
     RELAY = 'relay' #When the server receives a packet with a destinationAddress that corresponds to another client on the network, a relay packet is sent to server NOTIFICATIONS and then the original packet is forwarded to the intended client
-    #Note: RELAY not implemented.
-    #Note: serverTCP forwarding for header sourceAddresses not implemented yet
     
     
     
@@ -121,3 +119,15 @@ def constructFullPacketContent(socketConnection: socket, packetSize: int, length
 
 def serializePacketObject(nonSerializedPacketObject: packetObject) -> bytes:
     return pickle.dumps(nonSerializedPacketObject)
+
+
+def unSerializePacketObject(serializedPacketObject: bytes) -> packetObject:
+    return pickle.loads(serializedPacketObject)
+
+
+def getFullPacketBytes(header: typing.Union[packetObject, bytes], packet: typing.Union[packetObject, bytes]) -> bytes:
+    if type(header) is packetObject:
+        header = serializePacketObject(header)
+    if type(packet) is packetObject:
+        packet = serializePacketObject(packet)
+    return header + packet
