@@ -2,6 +2,4 @@ NO 1. serverTCP needs a way to terminate clients on command. Terminating clients
 
 NO 2. When creating multiple instances of clientTCP connected to the same serverTCP, the first instance of clientTCP locks the main thread for some reason.
 
-NO 3. Relay packet says success=False when client sends packet with destination as packets.AddressType.OTHERS(), this may be because no other clients on network so no packets are sent out. Need to fix issue 2 first.
-
 NO 4. packets.AddressType.ALL() does not include the server and neither does packets.AddressType.OTHERS().
