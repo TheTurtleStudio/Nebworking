@@ -1,3 +1,5 @@
-NO 1. serverTCP needs a way to terminate clients on command. Terminating clients should send a TERMINATE packet before termination to notify client
+serverTCP needs a way to terminate clients on command. Terminating clients should send a TERMINATE packet before termination to notify client. 
 
-NO 4. packets.AddressType.ALL() does not include the server and neither does packets.AddressType.OTHERS().
+packets.AddressType.ALL() does not include the server and neither does packets.AddressType.OTHERS(), decide if we want to keep this functionality.
+
+waitForConnectionPacket goes through, getting notifications out of the NOTIFICATION queue, checking if its a connect packet, and then putting it at the back of the queue, putting the queue in reverse order. Look for a way to just peek at the queue, without modifying it, and checking for connection packets. DO NOT MODIFY QUEUE
