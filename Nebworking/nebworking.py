@@ -12,7 +12,7 @@ class _settings():
 
 
 class serverTCP():
-    def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, RELAYCALLBACK=None, ALLOWSOURCESPOOFING=True) -> None:
+    def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, RELAYCALLBACK=None, ALLOWSOURCESPOOFING=True, AUTORESPONSEPACKETS=True) -> None:
         self.IP: str = IP
         self.PORT: int = PORT
         self.SOCKET: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -24,6 +24,7 @@ class serverTCP():
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
         self.RELAYFUNCTION: typing.Callable[[packets.packetObject, packets.packetObject], None] = self.handleRelay if RELAYCALLBACK is None else RELAYCALLBACK
         self.ALLOWSOURCESPOOFING: bool = ALLOWSOURCESPOOFING #To be implemented
+        self.AUTORESPONSEPACKETS: bool = AUTORESPONSEPACKETS #Whether or not the server will send out response packets automatically, disable for better throughput
         
         
     def start(self) -> None:
@@ -53,7 +54,7 @@ class serverTCP():
         elif sourceAddress is None and header is not None:
             sourceAddress = packets.unSerializePacketObject(header).data['sourceAddress'] 
         if destinationAddress is None and header is None:
-            destinationAddress = packets.AddressType.ALL() #Send to all clients
+            destinationAddress = packets.AddressType.ALL() #Send to all clients as default
         elif destinationAddress is None and header is not None:
             destinationAddress = packets.unSerializePacketObject(header).data['destinationAddress']
 
@@ -124,15 +125,15 @@ class serverTCP():
                     continue 
                 
                 fullPacket = packets.constructFullPacketContent(socketConnection=client.CONNECTION, packetSize=self.PACKETSIZE, length=messageLength)
-                _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=client.ADDRESS)#Send Accepted reponse to show client we got it.
+                _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS)#Send Accepted reponse to show client we got it.
                 if headerAsObject.data['destinationAddress'] == (self.IP, self.PORT):
                     self.queueNotification(header=headerAsObject, packet=fullPacket)
-                    _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS) #Server took it, send OK
+                    _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS) #Server took it, send OK
                 else:
                     if self.RELAYFUNCTION(headerAsObject, fullPacket):
-                        _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS) #No breaking rules and delivered, send OK
+                        _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS) #No breaking rules and delivered, send OK
                     else:
-                        _common.sendResponse(packet=fullPacket, status=packets.ResponseStatus.C400, sendPacketCallback=self.sendPacket, address=client.ADDRESS) #Not delivered or breaking rules, send Bad Request
+                        _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C400, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS) #Not delivered or breaking rules, send Bad Request
                     
                     
         except ConnectionResetError:
@@ -177,7 +178,7 @@ class serverTCP():
             
             
 class clientTCP():
-    def __init__(self, SERVERIP: str, SERVERPORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False) -> None:
+    def __init__(self, SERVERIP: str, SERVERPORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, AUTORESPONSEPACKETS: bool=True) -> None:
         self.SERVERIP: str = SERVERIP
         self.SERVERPORT: int = SERVERPORT
         self.SOCKET: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -185,6 +186,7 @@ class clientTCP():
         self.DEBUG: bool = DEBUG
         self.PACKETSIZE: int = _settings.PACKETSIZE #Size of portion of packet taken from network stack at a time
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
+        self.AUTORESPONSEPACKETS: bool = AUTORESPONSEPACKETS #Whether or not the client will send out response packets automatically, disable for better throughput
         
         self.FLAG_TERMINATE: bool = False
         
@@ -219,8 +221,8 @@ class clientTCP():
             for _chunks in range(ceil(messageLength / self.PACKETSIZE)):
                 packetBytes += self.SOCKET.recv(self.PACKETSIZE)
             packet: packets.packetObject = pickle.loads(packetBytes)
-            _common.sendResponse(packet=packet, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'])
-            _common.sendResponse(packet=packet, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'])
+            _common.sendAutoResponse(packet=packet, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'], autoResponseSetting=self.AUTORESPONSEPACKETS)
+            _common.sendAutoResponse(packet=packet, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'], autoResponseSetting=self.AUTORESPONSEPACKETS)
             self.queueNotification(header=headerAsObject, packet=packet) #Queue notification of packet
         
         
@@ -279,7 +281,6 @@ class _common():
         connection.sendall(fullPacketBytes)
         
     @staticmethod
-    def sendResponse(packet: packets.packetObject, sendPacketCallback: typing.Callable, status: packets.ResponseStatus, address: typing.Tuple[str, int]):
-        if packet.packetType != packets.PacketType.RESPONSE: #If we're not responding to a response, respond. Duh.
-            
-            sendPacketCallback(packet=packets.construct.response(status=status), destinationAddress=address) #Send Accepted reponse to show client we got it.
+    def sendAutoResponse(packet: packets.packetObject, sendPacketCallback: typing.Callable, status: packets.ResponseStatus, address: typing.Tuple[str, int], autoResponseSetting: bool=True):
+        if packet.packetType != packets.PacketType.RESPONSE and autoResponseSetting: #If we're not responding to a response, respond. Duh. And if autoresponse is true
+            sendPacketCallback(packet=packets.construct.response(status=status), destinationAddress=address)
