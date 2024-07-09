@@ -1,6 +1,6 @@
 import typing, enum, pickle, math
 from socket import socket
-import objects
+import Nebworking.objects as objects
 
 
 

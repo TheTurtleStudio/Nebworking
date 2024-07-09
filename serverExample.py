@@ -1,4 +1,7 @@
-import nebworking, packets, typing, eventTypes
+import Nebworking.nebworking as nebworking
+import Nebworking.packets as packets
+from Nebworking.eventTypes import Events
+import typing
 
 print("I'm the server")
 HOST = "192.168.0.58"  # The server's hostname or IP address
@@ -12,5 +15,5 @@ class Callbacks():
 
 
 server = nebworking.serverTCP(IP=HOST, PORT=PORT, DEBUG=False)
-server.addEventCallback(event=eventTypes.Events.NOTIFICATION, callback=Callbacks.newNotification)
+server.addEventCallback(event=Events.NOTIFICATION, callback=Callbacks.newNotification)
 server.start()

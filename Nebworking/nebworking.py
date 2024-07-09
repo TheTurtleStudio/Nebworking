@@ -1,8 +1,8 @@
 import socket, typing, threading, pickle, queue
 from math import ceil
-import objects
-import packets
-from eventTypes import Events
+import Nebworking.objects as objects
+import Nebworking.packets as packets
+from Nebworking.eventTypes import Events
 from uuid import uuid4 as uuid
 from uuid import UUID
 

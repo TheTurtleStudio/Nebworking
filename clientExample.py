@@ -1,5 +1,7 @@
-import nebworking, packets, typing
-from eventTypes import Events
+import Nebworking.nebworking as nebworking
+import Nebworking.packets as packets
+from Nebworking.eventTypes import Events
+import typing
 
 print("I'm the client")
 HOST = "192.168.0.58"  # The server's hostname or IP address
