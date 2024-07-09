@@ -110,8 +110,12 @@ class _baseTCP():
             
             return [(eventCallback['UUID'], eventCallback['callback'](*args, **kwargs)) for eventCallback in self.EVENTCALLBACKS if eventCallback['event'] == event]
         
+    class CALLBACK_UTILS(INTERNALCALLBACKS, EVENTS):
+        def invokeAllCallbacks(self, event: Events, *args, **kwargs) -> typing.Any:
+            self.invokeInternalCallback(event, *args, **kwargs)
+            self.invokeEventCallbacks(event, *args, **kwargs)
     
-class serverTCP(_baseTCP.UTILS, _baseTCP.INTERNALCALLBACKS, _baseTCP.EVENTS):
+class serverTCP(_baseTCP.UTILS, _baseTCP.CALLBACK_UTILS):
     
     def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, ALLOWSOURCESPOOFING=True, SENDSTATUSPACKETS=True) -> None:
         self.IP: str = IP
@@ -214,6 +218,7 @@ class serverTCP(_baseTCP.UTILS, _baseTCP.INTERNALCALLBACKS, _baseTCP.EVENTS):
         connectionPacket = packets.construct.connection(client=client, pickled=False)
         connectionPacketHeader = packets.createHeader(packet=connectionPacket, sourceAddress=(self.IP, self.PORT), destinationAddress=(self.IP, self.PORT), pickled=False)
         self.queueNotification(header=connectionPacketHeader, packet=connectionPacket)
+        self.invokeAllCallbacks(Events.CONNECTION, client)
         self.debug(f'[CONNECTION]: {clientAddress} connected')
         self.THREADLOCK.acquire()
         ### BEGIN THREADLOCK ###
@@ -256,6 +261,7 @@ class serverTCP(_baseTCP.UTILS, _baseTCP.INTERNALCALLBACKS, _baseTCP.EVENTS):
         terminatePacket = packets.construct.terminate(client=client, pickled=False)
         terminatePacketHeader = packets.createHeader(packet=terminatePacket, sourceAddress=(self.IP, self.PORT), destinationAddress=(self.IP, self.PORT), pickled=False)
         self.queueNotification(header=terminatePacketHeader, packet=terminatePacket)
+        self.invokeAllCallbacks(Events.TERMINATION, client)
         self.debug(f'[CONNECTION]: {clientAddress} connection closed')
     
     def queueNotification(self, header: packets.packetObject, packet: packets.packetObject) -> None:
@@ -275,7 +281,7 @@ class serverTCP(_baseTCP.UTILS, _baseTCP.INTERNALCALLBACKS, _baseTCP.EVENTS):
         return [clientObject.ADDRESS for clientObject in self.CLIENTS.values()]
             
                         
-class clientTCP(_baseTCP.UTILS, _baseTCP.INTERNALCALLBACKS, _baseTCP.EVENTS):
+class clientTCP(_baseTCP.UTILS, _baseTCP.CALLBACK_UTILS):
     def __init__(self, SERVERIP: str, SERVERPORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, SENDSTATUSPACKETS: bool=True) -> None:
         self.SERVERIP: str = SERVERIP
         self.SERVERPORT: int = SERVERPORT
@@ -303,6 +309,7 @@ class clientTCP(_baseTCP.UTILS, _baseTCP.INTERNALCALLBACKS, _baseTCP.EVENTS):
         
     def mainClientThread(self) -> None:
         self.SOCKET.connect((self.SERVERIP, self.SERVERPORT))
+        self.invokeAllCallbacks(Events.CONNECTION, self.SOCKET)
         self.debug(f'[CONNECTED]: Client connected to {self.SERVERIP}:{self.SERVERPORT}')
         receiveThread = threading.Thread(target=self.receiveThread)
         receiveThread.start()
