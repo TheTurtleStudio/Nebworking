@@ -1,6 +1,6 @@
 import typing, enum, pickle, math
 from socket import socket
-from . import objects
+import objects
 
 
 
@@ -11,7 +11,7 @@ class PacketType(str, enum.Enum):
     PAYLOAD = 'payload' #Normal data packet.
     CONNECTION = 'connection' #Sent to server NOTIFICATIONS when a connection is established between client and server
     RELAY = 'relay' #When the server receives a packet with a destinationAddress that corresponds to another client on the network, a relay packet is sent to server NOTIFICATIONS and then the original packet is forwarded to the intended client
-    RESPONSE = 'reponse' #Sent to the client when a packet is handled. Returned status via ResponseStatus
+    STATUS = 'status' #Sent to the client when a packet is handled. Returned status via ResponseStatus
     
     
 class ResponseStatus(str, enum.Enum): #Based off HTTP response status codes
@@ -102,9 +102,9 @@ class construct():
     
     
     @staticmethod
-    def response(status: ResponseStatus, pickled: bool = True) -> typing.Union[packetObject, bytes]:
+    def status(status: ResponseStatus, pickled: bool = True) -> typing.Union[packetObject, bytes]:
         data = {'status': status.name, 'description': status.value}
-        packet = packetObject(packetType=PacketType.RESPONSE, data=data)
+        packet = packetObject(packetType=PacketType.STATUS, data=data)
         if pickled:
             return pickle.dumps(packet)
         return packet

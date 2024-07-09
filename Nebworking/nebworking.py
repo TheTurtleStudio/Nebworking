@@ -1,8 +1,8 @@
 import socket, typing, threading, pickle, queue #Public libraries
 from math import ceil
-from . import packets #Local libraries
-from . import objects
-
+#from . import packets #Local libraries
+import objects
+import packets
 
 
 
@@ -10,9 +10,9 @@ class _settings():
     PACKETSIZE: int = 1024
 
 
-
+#On start create a new thread that watches notifications and raises a callback if found
 class serverTCP():
-    def __init__(self, IP: str, PORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, RELAYCALLBACK=None, ALLOWSOURCESPOOFING=True, AUTORESPONSEPACKETS=True) -> None:
+    def __init__(self, IP: str, PORT: int, NOTIFICATIONCALLBACK: typing.Callable[[object], None], ENCODING: str = 'UTF-8', DEBUG: bool = False, RELAYCALLBACK=None, ALLOWSOURCESPOOFING=True, SENDSTATUSPACKETS=True) -> None:
         self.IP: str = IP
         self.PORT: int = PORT
         self.SOCKET: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -23,13 +23,16 @@ class serverTCP():
         self.THREADLOCK: threading.Lock = threading.Lock()
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
         self.RELAYFUNCTION: typing.Callable[[packets.packetObject, packets.packetObject], None] = self.handleRelay if RELAYCALLBACK is None else RELAYCALLBACK
+        self.NOTIFICATIONCALLBACK: typing.Callable[[typing.Tuple[packets.packetObject, packets.packetObject]], None] = NOTIFICATIONCALLBACK
         self.ALLOWSOURCESPOOFING: bool = ALLOWSOURCESPOOFING #To be implemented
-        self.AUTORESPONSEPACKETS: bool = AUTORESPONSEPACKETS #Whether or not the server will send out response packets automatically, disable for better throughput
+        self.SENDSTATUSPACKETS: bool = SENDSTATUSPACKETS #Whether or not the server will send out response packets automatically, disable for better throughput
         
         
     def start(self) -> None:
         mainServerThread = threading.Thread(target=self.mainServerThread)
         mainServerThread.start()
+        watchQueueThread = threading.Thread(target=self.watchNotificationQueue)
+        watchQueueThread.start()
         
     
     def mainServerThread(self) -> None:
@@ -42,6 +45,13 @@ class serverTCP():
             handleClient = threading.Thread(target=self.handleClient, args=(connection, clientAddress))
             handleClient.start()
          
+    
+    def watchNotificationQueue(self) -> None: #Calls notification callback function
+        while True:
+            notification = self.getNotification()
+            if notification:
+                self.NOTIFICATIONCALLBACK(notification)
+    
     
     def sendData(self, data: bytes, sourceAddress: typing.Tuple[str, int] = None, destinationAddress: typing.Tuple[str, int] = None) -> None:
         payloadPacket = packets.construct.payload(data)
@@ -125,15 +135,15 @@ class serverTCP():
                     continue 
                 
                 fullPacket = packets.constructFullPacketContent(socketConnection=client.CONNECTION, packetSize=self.PACKETSIZE, length=messageLength)
-                _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS)#Send Accepted reponse to show client we got it.
+                _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.SENDSTATUSPACKETS)#Send Accepted reponse to show client we got it.
                 if headerAsObject.data['destinationAddress'] == (self.IP, self.PORT):
                     self.queueNotification(header=headerAsObject, packet=fullPacket)
-                    _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS) #Server took it, send OK
+                    _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.SENDSTATUSPACKETS) #Server took it, send OK
                 else:
                     if self.RELAYFUNCTION(headerAsObject, fullPacket):
-                        _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS) #No breaking rules and delivered, send OK
+                        _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.SENDSTATUSPACKETS) #No breaking rules and delivered, send OK
                     else:
-                        _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C400, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.AUTORESPONSEPACKETS) #Not delivered or breaking rules, send Bad Request
+                        _common.sendAutoResponse(packet=fullPacket, status=packets.ResponseStatus.C400, sendPacketCallback=self.sendPacket, address=client.ADDRESS, autoResponseSetting=self.SENDSTATUSPACKETS) #Not delivered or breaking rules, send Bad Request
                     
                     
         except ConnectionResetError:
@@ -178,7 +188,7 @@ class serverTCP():
             
             
 class clientTCP():
-    def __init__(self, SERVERIP: str, SERVERPORT: int, ENCODING: str = 'UTF-8', DEBUG: bool = False, AUTORESPONSEPACKETS: bool=True) -> None:
+    def __init__(self, SERVERIP: str, SERVERPORT: int, NOTIFICATIONCALLBACK: typing.Callable[[object], None], ENCODING: str = 'UTF-8', DEBUG: bool = False, SENDSTATUSPACKETS: bool=True) -> None:
         self.SERVERIP: str = SERVERIP
         self.SERVERPORT: int = SERVERPORT
         self.SOCKET: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -186,7 +196,8 @@ class clientTCP():
         self.DEBUG: bool = DEBUG
         self.PACKETSIZE: int = _settings.PACKETSIZE #Size of portion of packet taken from network stack at a time
         self.NOTIFICATIONS: queue.Queue = queue.Queue() #Used to send packets to library user
-        self.AUTORESPONSEPACKETS: bool = AUTORESPONSEPACKETS #Whether or not the client will send out response packets automatically, disable for better throughput
+        self.NOTIFICATIONCALLBACK: typing.Callable[[typing.Tuple[packets.packetObject, packets.packetObject]], None] = NOTIFICATIONCALLBACK
+        self.SENDSTATUSPACKETS: bool = SENDSTATUSPACKETS #Whether or not the client will send out response packets automatically, disable for better throughput
         
         self.FLAG_TERMINATE: bool = False
         
@@ -194,6 +205,8 @@ class clientTCP():
     def start(self) -> None:
         mainClientThread = threading.Thread(target=self.mainClientThread)
         mainClientThread.start()
+        watchQueueThread = threading.Thread(target=self.watchNotificationQueue)
+        watchQueueThread.start()
         
         
     def mainClientThread(self) -> None:
@@ -202,6 +215,13 @@ class clientTCP():
         receiveThread = threading.Thread(target=self.receiveThread)
         receiveThread.start()
         receiveThread.join()
+        
+        
+    def watchNotificationQueue(self) -> None: #Calls notification callback function
+        while True:
+            notification = self.getNotification()
+            if notification:
+                self.NOTIFICATIONCALLBACK(notification)
             
             
     def receiveThread(self) -> None:
@@ -221,8 +241,8 @@ class clientTCP():
             for _chunks in range(ceil(messageLength / self.PACKETSIZE)):
                 packetBytes += self.SOCKET.recv(self.PACKETSIZE)
             packet: packets.packetObject = pickle.loads(packetBytes)
-            _common.sendAutoResponse(packet=packet, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'], autoResponseSetting=self.AUTORESPONSEPACKETS)
-            _common.sendAutoResponse(packet=packet, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'], autoResponseSetting=self.AUTORESPONSEPACKETS)
+            _common.sendAutoResponse(packet=packet, status=packets.ResponseStatus.C202, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'], autoResponseSetting=self.SENDSTATUSPACKETS)
+            _common.sendAutoResponse(packet=packet, status=packets.ResponseStatus.C200, sendPacketCallback=self.sendPacket, address=headerAsObject.data['sourceAddress'], autoResponseSetting=self.SENDSTATUSPACKETS)
             self.queueNotification(header=headerAsObject, packet=packet) #Queue notification of packet
         
         
@@ -282,5 +302,5 @@ class _common():
         
     @staticmethod
     def sendAutoResponse(packet: packets.packetObject, sendPacketCallback: typing.Callable, status: packets.ResponseStatus, address: typing.Tuple[str, int], autoResponseSetting: bool=True):
-        if packet.packetType != packets.PacketType.RESPONSE and autoResponseSetting: #If we're not responding to a response, respond. Duh. And if autoresponse is true
-            sendPacketCallback(packet=packets.construct.response(status=status), destinationAddress=address)
+        if packet.packetType != packets.PacketType.STATUS and autoResponseSetting: #If we're not responding to a response, respond. Duh. And if autoresponse is true
+            sendPacketCallback(packet=packets.construct.status(status=status), destinationAddress=address)
