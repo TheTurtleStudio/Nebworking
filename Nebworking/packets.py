@@ -45,11 +45,11 @@ class AddressType():
 class packetObject():
     def __init__(self, packetType: PacketType, data: bytes = None) -> None:
         self.packetType: PacketType = packetType
-        self.data: object = data
+        self.data: typing.Any = data
         
         
     @property
-    def raw(self) -> typing.Dict[str, object]:
+    def raw(self) -> typing.Dict[str, typing.Any]:
         return {'packetType': self.packetType, 'data': self.data}
     
     
