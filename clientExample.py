@@ -26,6 +26,6 @@ client.start()
 client.waitForConnectionPacket() #clientTCP runs on another thread so wait until we have a confirmed connection before using our client. Not *necessary*, just VERY highly advised.
 
 #An example of sending data to all the other connected clients. Server does get a relay notification informing them of the rerouting of packets. Server can also block this if configured.
-client.sendData(f'Hello other clients! Sincerely, {client.SOCKET.getsockname()}'.encode(encoding=client.ENCODING), destinationAddress=packets.AddressType.OTHERS())
+client.sendData(f'Hello other clients! Sincerely, {client.SOCKET.getsockname()}'.encode(encoding=client.ENCODING))
 
     
