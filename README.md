@@ -2,7 +2,7 @@
 <h1 align="center" style="font-weight: bold;">Nebworking</h1>
 
 
-<p align="center">A multi-threaded client/server networking framework built on the Python socket library. Designed to implement networking into your projects as easily and quickly as possible whilst still staying robust and capable.</p>
+<p align="center">An event-based client/server networking framework built on the Python socket library. Designed to implement networking into your projects as easily and quickly as possible whilst still staying robust and capable.</p>
 
 
  
