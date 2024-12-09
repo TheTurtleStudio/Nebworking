@@ -43,6 +43,7 @@ import Nebworking.packets as packets
 from Nebworking.eventTypes import Events
 from uuid import uuid4 as uuid
 from uuid import UUID
+from time import time
 
 
 
@@ -397,14 +398,20 @@ class clientTCP(_baseTCP.UTILS, _baseTCP.CALLBACK_UTILS):
         header = packets.createHeader(packet=packet, sourceAddress=sourceAddress, destinationAddress=destinationAddress)
         self.sendPacketPair(headerPacket=header, contentPacket=packet, connection=self.SOCKET)
               
-    def waitForConnectionPacket(self):
+    def waitForConnectionPacket(self, timeout: typing.Union[float, None]=None) -> bool:
+        if timeout is not None:
+            timeStart = time()
+            timeEnd = timeStart + timeout
         while True:
             if self.NOTIFICATIONS.qsize() > 0:
                 notification: typing.Tuple[packets.packetObject, packets.packetObject] = self.NOTIFICATIONS.get()
                 header, packet = notification
                 self.NOTIFICATIONS.put(notification)
                 if packet.packetType == packets.PacketType.CONNECTION:
-                    break
+                    return True
+            if timeout is not None:
+                if timeEnd <= time():
+                    return False
                     
     def getNotification(self) -> typing.Tuple[packets.packetObject, packets.packetObject]:
         if self.NOTIFICATIONS.qsize() == 0:
