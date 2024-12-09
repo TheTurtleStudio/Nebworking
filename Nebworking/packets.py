@@ -84,7 +84,7 @@ class construct():
     
     @staticmethod
     def connection(client: objects.clientObjectSerializable, pickled: bool = True) -> typing.Union[packetObject, bytes]:
-        client = objects.getSerializableClientObject(client)
+        client = objects.getSerializableClientObject(client) if client is not None else None
         data = {'clientObject': client}
         packet = packetObject(packetType=PacketType.CONNECTION, data=data)
         if pickled:

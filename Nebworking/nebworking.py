@@ -350,6 +350,7 @@ class clientTCP(_baseTCP.UTILS, _baseTCP.CALLBACK_UTILS):
         self.SOCKET.connect((self.SERVERIP, self.SERVERPORT))
         self.invokeAllCallbacks(Events.CONNECTION, self.SOCKET)
         self.debug(f'[CONNECTED]: Client connected to {self.SERVERIP}:{self.SERVERPORT}')
+        self.sendPacket(packet=packets.construct.connection(client=None), destinationAddress=(self.SERVERIP, self.SERVERPORT))
         receiveThread = threading.Thread(target=self.receiveThread)
         receiveThread.start()
         receiveThread.join()
