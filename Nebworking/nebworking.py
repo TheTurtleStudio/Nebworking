@@ -354,7 +354,7 @@ class clientTCP(_baseTCP.UTILS, _baseTCP.CALLBACK_UTILS):
         receiveThread.join()
         
     def watchNotificationQueue(self) -> None: #Calls notification callback function
-        while True:
+        while not self.FLAG_TERMINATE:
             notification = self.getNotification()
             if notification:
                 self.invokeInternalCallback(Events.NOTIFICATION, notification)
